@@ -1,0 +1,32 @@
+{
+  "tasks": [
+    {
+      "task_id": "<id>",
+      "title": "Open task",
+      "status": "open",
+      "priority": "high",
+      "room_id": "<id>",
+      "project_id": "<id>",
+      "source_kind": "message",
+      "source_ref": "<ref>",
+      "owner_kind": "unassigned",
+      "owner_id": null,
+      "approval_state": "required",
+      "confidence": 0.91,
+      "tags": ["alpha"],
+      "created_at": "<timestamp>",
+      "updated_at": "<timestamp>",
+      "summary": "Needs work",
+      "type": "feature",
+      "created_by_subsystem": "task_master",
+      "updated_by_subsystem": "task_master",
+      "approval_required": true,
+      "parent_task_id": null,
+      "depends_on": ["<id>"],
+      "last_progress_at": "<timestamp>",
+      "closed_at": null,
+      "chat_task_id": "<id>"
+    }
+  ],
+  "count": 1
+}

@@ -1,0 +1,88 @@
+{
+  "task": {
+    "task_id": "<id>",
+    "title": "Open task",
+    "status": "open",
+    "priority": "high",
+    "room_id": "<id>",
+    "project_id": "<id>",
+    "source_kind": "message",
+    "source_ref": "<ref>",
+    "owner_kind": "unassigned",
+    "owner_id": null,
+    "approval_state": "required",
+    "confidence": 0.91,
+    "tags": ["alpha"],
+    "created_at": "<timestamp>",
+    "updated_at": "<timestamp>",
+    "summary": "Needs work",
+    "type": "feature",
+    "created_by_subsystem": "task_master",
+    "updated_by_subsystem": "task_master",
+    "approval_required": true,
+    "parent_task_id": null,
+    "depends_on": ["<id>"],
+    "last_progress_at": "<timestamp>",
+    "closed_at": null,
+    "chat_task_id": "<id>"
+  },
+  "parent": null,
+  "children": [],
+  "dependencies": [
+    {
+      "task_id": "<id>",
+      "title": "Blocked task",
+      "status": "blocked",
+      "priority": "normal",
+      "room_id": "<id>",
+      "project_id": "<id>",
+      "source_kind": "message",
+      "source_ref": "<ref>",
+      "owner_kind": "human",
+      "owner_id": "<id>",
+      "approval_state": "not_required",
+      "confidence": 0.7,
+      "tags": ["beta"],
+      "created_at": "<timestamp>",
+      "updated_at": "<timestamp>",
+      "summary": "Blocked now",
+      "type": "ops",
+      "created_by_subsystem": "task_master",
+      "updated_by_subsystem": "task_master",
+      "approval_required": false,
+      "parent_task_id": null,
+      "depends_on": [],
+      "last_progress_at": "<timestamp>",
+      "closed_at": null,
+      "chat_task_id": "<id>"
+    }
+  ],
+  "related": [],
+  "approvals": [],
+  "handoffs": [],
+  "events": [
+    {
+      "event_id": "<id>",
+      "event_type": "approval.required",
+      "category": "approval",
+      "occurred_at": "<timestamp>",
+      "room_id": "<id>",
+      "subsystem": "approval",
+      "actor_kind": "system",
+      "actor_id": null,
+      "source_kind": "approval",
+      "source_ref": "<ref>",
+      "correlation_id": "<id>",
+      "task_id": "<id>",
+      "project_id": "<id>",
+      "payload": {
+        "safe": true,
+        "tool_args": {
+          "api_key": "[REDACTED]"
+        }
+      },
+      "metadata": {},
+      "redacted": true
+    }
+  ]
+}
