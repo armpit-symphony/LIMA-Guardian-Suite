@@ -12,7 +12,12 @@ from tools.spine_readonly_adapter_prototype import SparkbotReadonlySpineAdapterP
 
 
 def _task_dict(task: SpineTask) -> dict[str, Any]:
-    return task.to_dict()
+    raw = task.to_dict()
+    metadata = dict(raw.get("metadata") or {})
+    raw["created_by_subsystem"] = metadata.get("created_by_subsystem")
+    raw["updated_by_subsystem"] = metadata.get("updated_by_subsystem")
+    raw["chat_task_id"] = metadata.get("chat_task_id")
+    return raw
 
 
 def _event_dict(event: SpineEventEnvelope) -> dict[str, Any]:
