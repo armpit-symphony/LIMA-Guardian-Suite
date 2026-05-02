@@ -45,7 +45,7 @@ Issues = "https://github.com/armpit-symphony/Guardian_Suite/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["guardian*"]
+include = ["guardian*", "lima_guardian*"]
 
 [tool.ruff]
 line-length = 100
