@@ -2,6 +2,12 @@
 
 This repo centralizes the Guardian stack extracted from Sparkbot into one place.
 
+## Historical References
+
+These are historical documentation references only. Current product code lives in `lima_guardian/`.
+
+See `docs/reference/original_guardians/` for documentation-only notes on the original standalone Guardian repositories.
+
 ## Layout
 
 - `app/services/guardian/`
