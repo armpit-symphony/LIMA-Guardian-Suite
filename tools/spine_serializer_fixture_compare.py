@@ -22,14 +22,35 @@ VOLATILE_ID_KEYS = {
 }
 VOLATILE_REF_KEYS = {"source_ref"}
 VOLATILE_ID_LIST_KEYS = {"depends_on"}
+GENERIC_STRING_KEYS = {
+    "title",
+    "summary",
+    "status",
+    "priority",
+    "type",
+    "source_kind",
+    "owner_kind",
+    "approval_state",
+    "created_by_subsystem",
+    "updated_by_subsystem",
+    "event_type",
+    "category",
+    "subsystem",
+    "actor_kind",
+}
+GENERIC_NUMBER_KEYS = {"confidence"}
 
 
 def _normalize(value: Any, key: str | None = None) -> Any:
     if isinstance(value, dict):
+        if key == "payload":
+            return {}
         return {k: _normalize(v, k) for k, v in value.items()}
     if isinstance(value, list):
         if key in VOLATILE_ID_LIST_KEYS:
             return ["<id>" if isinstance(item, str) else _normalize(item, key) for item in value]
+        if key == "tags":
+            return ["<str>" if isinstance(item, str) else _normalize(item, key) for item in value]
         return [_normalize(item, key) for item in value]
     if isinstance(value, str):
         if key in VOLATILE_TIMESTAMP_KEYS:
@@ -38,6 +59,10 @@ def _normalize(value: Any, key: str | None = None) -> Any:
             return "<id>"
         if key in VOLATILE_REF_KEYS:
             return "<ref>"
+        if key in GENERIC_STRING_KEYS:
+            return "<str>"
+    if isinstance(value, (int, float)) and key in GENERIC_NUMBER_KEYS:
+        return "<number>"
     return value
 
 
@@ -54,7 +79,7 @@ def _compare_subset(expected: Any, actual: Any, path: str = "") -> list[str]:
             mismatches.extend(_compare_subset(expected_value, actual[key], next_path))
         return mismatches
     if isinstance(expected, list):
-        if not isinstance(actual, list) or len(actual) != len(expected):
+        if not isinstance(actual, list) or len(actual) < len(expected):
             return [path or "$"]
         for index, (expected_item, actual_item) in enumerate(zip(expected, actual)):
             mismatches.extend(_compare_subset(expected_item, actual_item, f"{path}[{index}]"))

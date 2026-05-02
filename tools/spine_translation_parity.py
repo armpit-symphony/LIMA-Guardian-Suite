@@ -232,6 +232,16 @@ def _rows(conn: sqlite3.Connection, query: str) -> list[sqlite3.Row]:
     return list(conn.execute(query).fetchall())
 
 
+def _rows_if_present(conn: sqlite3.Connection, table: str) -> list[sqlite3.Row]:
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?",
+        (table,),
+    ).fetchone()
+    if not exists:
+        return []
+    return _rows(conn, f"SELECT * FROM {table}")
+
+
 def _translate_many(rows: list[Mapping[str, Any]], translator) -> tuple[int, int, list[Any]]:
     success = 0
     failure = 0
@@ -243,6 +253,89 @@ def _translate_many(rows: list[Mapping[str, Any]], translator) -> tuple[int, int
         except Exception:
             failure += 1
     return success, failure, translated
+
+
+def translate_assignment_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    raw = _row_dict(row)
+    metadata, redacted = _safe_metadata(
+        {
+            "owner_kind": raw.get("owner_kind"),
+            "owner_id": raw.get("owner_id"),
+            "assigned_by": raw.get("assigned_by"),
+        }
+    )
+    return {
+        "assignment_id": str(raw.get("id") or ""),
+        "task_id": str(raw.get("task_id") or ""),
+        "owner_kind": str(raw.get("owner_kind") or "unassigned"),
+        "owner_id": raw.get("owner_id"),
+        "assigned_at": str(raw.get("assigned_at") or ""),
+        "metadata": metadata,
+        "redacted": redacted,
+    }
+
+
+def translate_approval_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    raw = _row_dict(row)
+    scope, _ = _safe_json_load(raw.get("scope_json"), [])
+    metadata, redacted = _safe_metadata(
+        {
+            "requester_id": raw.get("requester_id"),
+            "approver_id": raw.get("approver_id"),
+            "approval_method": raw.get("approval_method"),
+        }
+    )
+    return {
+        "approval_id": str(raw.get("id") or ""),
+        "task_id": str(raw.get("task_id") or ""),
+        "state": str(raw.get("state") or "pending"),
+        "scope": scope if isinstance(scope, list) else [],
+        "expires_at": raw.get("expires_at"),
+        "created_at": str(raw.get("created_at") or ""),
+        "updated_at": str(raw.get("updated_at") or ""),
+        "metadata": metadata,
+        "redacted": redacted,
+    }
+
+
+def translate_handoff_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    raw = _row_dict(row)
+    metadata, redacted = _safe_metadata({"source_ref": raw.get("source_ref")})
+    return {
+        "handoff_id": str(raw.get("id") or ""),
+        "task_id": str(raw.get("task_id") or ""),
+        "room_id": raw.get("room_id"),
+        "summary": str(raw.get("summary") or ""),
+        "created_at": str(raw.get("created_at") or ""),
+        "metadata": metadata,
+        "redacted": redacted,
+    }
+
+
+def translate_project_event_row(row: Mapping[str, Any]) -> SpineEventEnvelope:
+    raw = _row_dict(row)
+    payload, invalid_json = _safe_json_load(raw.get("payload_json"), {})
+    if invalid_json or not isinstance(payload, dict):
+        payload = {}
+    redacted_payload = redact_sensitive(payload)
+    return SpineEventEnvelope(
+        event_id=str(raw.get("event_id") or ""),
+        event_type=str(raw.get("event_type") or ""),
+        category=SpineEventType.PROJECT,
+        occurred_at=str(raw.get("occurred_at") or ""),
+        room_id=raw.get("room_id"),
+        subsystem=raw.get("subsystem"),
+        actor_kind="system",
+        actor_id=None,
+        source_kind=str(raw.get("source_kind") or "project"),
+        source_ref=str(raw.get("source_ref") or ""),
+        correlation_id=str(raw.get("event_id") or ""),
+        task_id=None,
+        project_id=raw.get("project_id"),
+        payload=redacted_payload,
+        metadata={},
+        redacted=redacted_payload != payload,
+    )
 
 
 def build_report(source_db: str | Path) -> dict[str, Any]:
@@ -258,20 +351,31 @@ def build_report(source_db: str | Path) -> dict[str, Any]:
         conn = sqlite3.connect(str(temp_path))
         conn.row_factory = sqlite3.Row
         try:
-            task_rows = _rows(conn, "SELECT * FROM guardian_spine_tasks")
-            project_rows = _rows(conn, "SELECT * FROM guardian_spine_projects")
-            event_rows = _rows(conn, "SELECT * FROM guardian_spine_events")
-            relation_rows = _rows(conn, "SELECT * FROM guardian_spine_links")
+            task_rows = _rows_if_present(conn, "guardian_spine_tasks")
+            project_rows = _rows_if_present(conn, "guardian_spine_projects")
+            event_rows = _rows_if_present(conn, "guardian_spine_events")
+            relation_rows = _rows_if_present(conn, "guardian_spine_links")
+            assignment_rows = _rows_if_present(conn, "guardian_spine_assignments")
+            approval_rows = _rows_if_present(conn, "guardian_spine_approvals")
+            handoff_rows = _rows_if_present(conn, "guardian_spine_handoffs")
+            project_event_rows = _rows_if_present(conn, "guardian_spine_project_events")
 
             task_success, task_failure, tasks = _translate_many(task_rows, translate_task_row)
             project_success, project_failure, projects = _translate_many(project_rows, translate_project_row)
             event_success, event_failure, events = _translate_many(event_rows, translate_event_row)
             relation_success, relation_failure, relations = _translate_many(relation_rows, translate_relation_row)
+            assignment_success, assignment_failure, assignments = _translate_many(assignment_rows, translate_assignment_row)
+            approval_success, approval_failure, approvals = _translate_many(approval_rows, translate_approval_row)
+            handoff_success, handoff_failure, handoffs = _translate_many(handoff_rows, translate_handoff_row)
+            project_event_success, project_event_failure, project_events = _translate_many(
+                project_event_rows,
+                translate_project_event_row,
+            )
             producers = translate_producer_rows(event_rows)
 
             raw_rows_with_sensitive_keys = 0
             translated_redacted_events = 0
-            for event in events:
+            for event in [*events, *project_events]:
                 payload_text = json.dumps(event.payload, sort_keys=True)
                 if any(part in payload_text.lower() for part in SENSITIVE_KEY_PARTS):
                     raw_rows_with_sensitive_keys += 1
@@ -289,6 +393,10 @@ def build_report(source_db: str | Path) -> dict[str, Any]:
                     "projects": {"success": project_success, "failure": project_failure},
                     "events": {"success": event_success, "failure": event_failure},
                     "relations": {"success": relation_success, "failure": relation_failure},
+                    "assignments": {"success": assignment_success, "failure": assignment_failure},
+                    "approvals": {"success": approval_success, "failure": approval_failure},
+                    "handoffs": {"success": handoff_success, "failure": handoff_failure},
+                    "project_events": {"success": project_event_success, "failure": project_event_failure},
                     "producers": {"success": len(producers), "failure": 0},
                 },
                 "field_parity": {
@@ -323,6 +431,22 @@ def build_report(source_db: str | Path) -> dict[str, Any]:
                         "translated_fields": _field_names_for_model(relations[0]) if relations else [],
                         "derived_fields": ["from_entity_type", "to_entity_type"],
                     },
+                    "assignment": {
+                        "source_fields": sorted(assignment_rows[0].keys()) if assignment_rows else [],
+                        "translated_fields": sorted(assignments[0].keys()) if assignments else [],
+                    },
+                    "approval": {
+                        "source_fields": sorted(approval_rows[0].keys()) if approval_rows else [],
+                        "translated_fields": sorted(approvals[0].keys()) if approvals else [],
+                    },
+                    "handoff": {
+                        "source_fields": sorted(handoff_rows[0].keys()) if handoff_rows else [],
+                        "translated_fields": sorted(handoffs[0].keys()) if handoffs else [],
+                    },
+                    "project_event": {
+                        "source_fields": sorted(project_event_rows[0].keys()) if project_event_rows else [],
+                        "translated_fields": _field_names_for_model(project_events[0]) if project_events else [],
+                    },
                 },
                 "redaction_checks": {
                     "translated_redacted_events": translated_redacted_events,
@@ -330,10 +454,6 @@ def build_report(source_db: str | Path) -> dict[str, Any]:
                     "raw_values_emitted": False,
                 },
                 "limitations": [
-                    "Assignments are not translated yet.",
-                    "Approvals are not translated yet.",
-                    "Handoffs are not translated yet.",
-                    "Project events are not translated yet.",
                     "Producer translations are derived from event subsystems, not a persisted producer table.",
                 ],
             }

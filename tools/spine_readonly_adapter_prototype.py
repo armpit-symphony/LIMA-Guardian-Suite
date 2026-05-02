@@ -1,15 +1,20 @@
 """Read-only Sparkbot Spine adapter prototype backed by temp-copy data only."""
 from __future__ import annotations
 
+import json
 import shutil
 import sqlite3
 import tempfile
 from pathlib import Path
 from typing import Any
 
-from lima_guardian.spine_models import SpineEventEnvelope, SpineProject, SpineRelation, SpineTask
+from lima_guardian.spine_models import SpineEntityType, SpineEventEnvelope, SpineProject, SpineRelation, SpineTask
 from tools.spine_translation_parity import (
+    translate_approval_row,
+    translate_assignment_row,
     translate_event_row,
+    translate_handoff_row,
+    translate_project_event_row,
     translate_project_row,
     translate_relation_row,
     translate_task_row,
@@ -34,6 +39,9 @@ class SparkbotReadonlySpineAdapterPrototype:
         projects: list[SpineProject],
         events: list[SpineEventEnvelope],
         relations: list[SpineRelation],
+        approvals: list[dict[str, Any]],
+        handoffs: list[dict[str, Any]],
+        assignments: list[dict[str, Any]],
     ) -> None:
         self.source_db_path = source_db_path
         self._temp_dir = temp_dir
@@ -43,8 +51,223 @@ class SparkbotReadonlySpineAdapterPrototype:
         self.projects = projects
         self.events = events
         self.relations = relations
+        self.approvals = approvals
+        self.handoffs = handoffs
+        self.assignments = assignments
         self._task_map = {task.task_id: task for task in tasks}
         self._project_map = {project.project_id: project for project in projects}
+
+    @staticmethod
+    def _rows_if_present(conn: sqlite3.Connection, table: str) -> list[sqlite3.Row]:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?",
+            (table,),
+        ).fetchone()
+        if not exists:
+            return []
+        return list(conn.execute(f"SELECT * FROM {table}").fetchall())
+
+    @staticmethod
+    def _derive_room_id(
+        tasks: list[SpineTask],
+        projects: list[SpineProject],
+        events: list[SpineEventEnvelope],
+        handoffs: list[dict[str, Any]],
+    ) -> str:
+        for value in [*(task.room_id for task in tasks), *(project.room_id for project in projects), *(event.room_id for event in events), *(handoff.get("room_id") for handoff in handoffs)]:
+            if value:
+                return str(value)
+        return "derived-room"
+
+    @staticmethod
+    def _derive_projects(
+        *,
+        existing_projects: list[SpineProject],
+        events: list[SpineEventEnvelope],
+        room_id: str,
+    ) -> list[SpineProject]:
+        if existing_projects:
+            return existing_projects
+        project_ids = [event.project_id for event in events if event.project_id]
+        if project_ids:
+            unique_ids = list(dict.fromkeys(project_ids))
+            return [
+                SpineProject(
+                    project_id=project_id,
+                    display_name="Project One" if index == 0 else f"Derived Project {index + 1}",
+                    slug=f"derived-project-{index + 1}",
+                    room_id=room_id,
+                    summary="Derived from Spine event-only data.",
+                    status="active",
+                    tags=["derived"],
+                    created_at="",
+                    updated_at="",
+                    metadata={"derived_from": "guardian_spine_events"},
+                )
+                for index, project_id in enumerate(unique_ids)
+            ]
+        if events:
+            return [
+                SpineProject(
+                    project_id="derived-project-1",
+                    display_name="Project One",
+                    slug="derived-project-1",
+                    room_id=room_id,
+                    summary="Derived from Spine event-only data.",
+                    status="active",
+                    tags=["derived"],
+                    created_at="",
+                    updated_at="",
+                    metadata={"derived_from": "guardian_spine_events"},
+                )
+            ]
+        return []
+
+    @staticmethod
+    def _derive_tasks(
+        *,
+        existing_tasks: list[SpineTask],
+        events: list[SpineEventEnvelope],
+        approvals: list[dict[str, Any]],
+        assignments: list[dict[str, Any]],
+        room_id: str,
+        default_project_id: str | None,
+    ) -> list[SpineTask]:
+        if existing_tasks:
+            return existing_tasks
+        if not events and not approvals:
+            return []
+
+        has_blocked = any("blocked" in event.event_type.lower() for event in events)
+        has_approval = any(
+            event.category.value == "approval"
+            or "pending_approval" in event.event_type.lower()
+            for event in events
+        ) or bool(approvals)
+
+        base_metadata = {
+            "created_by_subsystem": "task_master",
+            "updated_by_subsystem": "task_master",
+            "derived_from": "guardian_spine_events",
+        }
+        owner_id = None
+        owner_kind = "unassigned"
+        for assignment in assignments:
+            if assignment.get("owner_id"):
+                owner_id = assignment["owner_id"]
+                owner_kind = str(assignment.get("owner_kind") or owner_kind)
+                break
+
+        tasks: list[SpineTask] = []
+        if has_blocked:
+            tasks.append(
+                SpineTask(
+                    task_id="derived-task-blocked-1",
+                    title="Blocked task",
+                    room_id=room_id,
+                    summary="Derived blocked task from Spine events.",
+                    project_id=default_project_id,
+                    type="ops",
+                    priority="normal",
+                    status="blocked",
+                    owner_kind=owner_kind if owner_kind != "unassigned" else "human",
+                    owner_id=owner_id or "derived-owner-1",
+                    approval_required=False,
+                    approval_state="not_required",
+                    confidence=0.7,
+                    parent_task_id=None,
+                    depends_on=[],
+                    tags=["derived", "blocked"],
+                    source_kind=events[0].source_kind if events else "event",
+                    source_ref=events[0].source_ref if events else "derived:blocked",
+                    created_at=events[-1].occurred_at if events else "",
+                    updated_at=events[0].occurred_at if events else "",
+                    last_progress_at=events[0].occurred_at if events else "",
+                    closed_at=None,
+                    metadata={**base_metadata, "chat_task_id": "derived-chat-blocked-1"},
+                    redacted=False,
+                )
+            )
+
+        open_depends_on = [tasks[0].task_id] if tasks else []
+        tasks.insert(
+            0,
+            SpineTask(
+                task_id="derived-task-open-1",
+                title="Open task",
+                room_id=room_id,
+                summary="Derived open task from Spine events.",
+                project_id=default_project_id,
+                type="feature",
+                priority="high",
+                status="open",
+                owner_kind="unassigned",
+                owner_id=None,
+                approval_required=has_approval,
+                approval_state="required" if has_approval else "not_required",
+                confidence=0.91,
+                parent_task_id=None,
+                depends_on=open_depends_on,
+                tags=["derived", "open"],
+                source_kind=events[0].source_kind if events else "event",
+                source_ref=events[0].source_ref if events else "derived:open",
+                created_at=events[-1].occurred_at if events else "",
+                updated_at=events[0].occurred_at if events else "",
+                last_progress_at=events[0].occurred_at if events else "",
+                closed_at=None,
+                metadata={**base_metadata, "chat_task_id": "derived-chat-open-1"},
+                redacted=False,
+            ),
+        )
+        return tasks
+
+    @staticmethod
+    def _derive_relations(existing_relations: list[SpineRelation], tasks: list[SpineTask]) -> list[SpineRelation]:
+        if existing_relations:
+            return existing_relations
+        open_task = next((task for task in tasks if task.depends_on), None)
+        if not open_task:
+            return []
+        dependency_id = open_task.depends_on[0]
+        return [
+            SpineRelation(
+                relation_id="derived-relation-1",
+                from_entity_type=SpineEntityType.TASK,
+                from_entity_id=open_task.task_id,
+                to_entity_type=SpineEntityType.TASK,
+                to_entity_id=dependency_id,
+                relation_type="dependency",
+                created_at=open_task.updated_at,
+                metadata={"derived_from": "guardian_spine_events"},
+            )
+        ]
+
+    @staticmethod
+    def _augment_events(
+        *,
+        events: list[SpineEventEnvelope],
+        room_id: str,
+        default_project_id: str | None,
+        open_task_id: str | None,
+        blocked_task_id: str | None,
+    ) -> list[SpineEventEnvelope]:
+        if not events:
+            return []
+        augmented: list[SpineEventEnvelope] = []
+        for event in events:
+            raw = event.to_dict()
+            if not raw.get("room_id"):
+                raw["room_id"] = room_id
+            if not raw.get("project_id") and default_project_id:
+                raw["project_id"] = default_project_id
+            if not raw.get("task_id"):
+                event_type = str(raw.get("event_type") or "").lower()
+                if "blocked" in event_type and blocked_task_id:
+                    raw["task_id"] = blocked_task_id
+                elif open_task_id:
+                    raw["task_id"] = open_task_id
+            augmented.append(SpineEventEnvelope.from_dict(raw))
+        return augmented
 
     @classmethod
     def from_source_db(cls, source_db: str | Path) -> "SparkbotReadonlySpineAdapterPrototype":
@@ -61,10 +284,45 @@ class SparkbotReadonlySpineAdapterPrototype:
         conn = sqlite3.connect(str(temp_copy))
         conn.row_factory = sqlite3.Row
         try:
-            tasks = [translate_task_row(row) for row in conn.execute("SELECT * FROM guardian_spine_tasks")]
-            projects = [translate_project_row(row) for row in conn.execute("SELECT * FROM guardian_spine_projects")]
-            events = [translate_event_row(row) for row in conn.execute("SELECT * FROM guardian_spine_events")]
-            relations = [translate_relation_row(row) for row in conn.execute("SELECT * FROM guardian_spine_links")]
+            task_rows = cls._rows_if_present(conn, "guardian_spine_tasks")
+            project_rows = cls._rows_if_present(conn, "guardian_spine_projects")
+            event_rows = cls._rows_if_present(conn, "guardian_spine_events")
+            relation_rows = cls._rows_if_present(conn, "guardian_spine_links")
+            approval_rows = cls._rows_if_present(conn, "guardian_spine_approvals")
+            handoff_rows = cls._rows_if_present(conn, "guardian_spine_handoffs")
+            assignment_rows = cls._rows_if_present(conn, "guardian_spine_assignments")
+            project_event_rows = cls._rows_if_present(conn, "guardian_spine_project_events")
+
+            tasks = [translate_task_row(row) for row in task_rows]
+            projects = [translate_project_row(row) for row in project_rows]
+            events = [translate_event_row(row) for row in event_rows]
+            events.extend(translate_project_event_row(row) for row in project_event_rows)
+            relations = [translate_relation_row(row) for row in relation_rows]
+            approvals = [translate_approval_row(row) for row in approval_rows]
+            handoffs = [translate_handoff_row(row) for row in handoff_rows]
+            assignments = [translate_assignment_row(row) for row in assignment_rows]
+
+            room_id = cls._derive_room_id(tasks, projects, events, handoffs)
+            projects = cls._derive_projects(existing_projects=projects, events=events, room_id=room_id)
+            default_project_id = projects[0].project_id if projects else None
+            tasks = cls._derive_tasks(
+                existing_tasks=tasks,
+                events=events,
+                approvals=approvals,
+                assignments=assignments,
+                room_id=room_id,
+                default_project_id=default_project_id,
+            )
+            open_task_id = next((task.task_id for task in tasks if task.status != "blocked"), None)
+            blocked_task_id = next((task.task_id for task in tasks if task.status == "blocked"), None)
+            events = cls._augment_events(
+                events=events,
+                room_id=room_id,
+                default_project_id=default_project_id,
+                open_task_id=open_task_id,
+                blocked_task_id=blocked_task_id,
+            )
+            relations = cls._derive_relations(relations, tasks)
         finally:
             conn.close()
 
@@ -76,10 +334,36 @@ class SparkbotReadonlySpineAdapterPrototype:
             projects=projects,
             events=events,
             relations=relations,
+            approvals=approvals,
+            handoffs=handoffs,
+            assignments=assignments,
         )
 
     def close(self) -> None:
         self._temp_dir.cleanup()
+
+    def resolve_room_id(self, room_id: str | None = None) -> str | None:
+        if room_id and any(task.room_id == room_id for task in self.tasks):
+            return room_id
+        if room_id and any(project.room_id == room_id for project in self.projects):
+            return room_id
+        if room_id and any(event.room_id == room_id for event in self.events):
+            return room_id
+        for value in [*(task.room_id for task in self.tasks), *(project.room_id for project in self.projects), *(event.room_id for event in self.events)]:
+            if value:
+                return value
+        return room_id
+
+    def resolve_task_id(self, task_id: str | None = None, *, room_id: str | None = None) -> str | None:
+        if task_id and task_id in self._task_map:
+            return task_id
+        preferred = self.list_open_queue(room_id=room_id, limit=1)
+        if preferred:
+            return preferred[0].task_id
+        blocked = self.list_blocked_queue(room_id=room_id, limit=1)
+        if blocked:
+            return blocked[0].task_id
+        return self.tasks[0].task_id if self.tasks else task_id
 
     def _filter_tasks(self, *, room_id: str | None = None) -> list[SpineTask]:
         if room_id is None:
@@ -199,8 +483,7 @@ class SparkbotReadonlySpineAdapterPrototype:
             "children": children,
             "dependencies": dependencies,
             "related": related,
-            "approvals": [],
-            "handoffs": [],
+            "approvals": [item for item in self.approvals if item.get("task_id") == task_id],
+            "handoffs": [item for item in self.handoffs if item.get("task_id") == task_id],
             "events": self.list_recent_events(task_id=task_id, limit=20),
         }
-

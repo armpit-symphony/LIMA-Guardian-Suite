@@ -95,13 +95,16 @@ def _validate_envelope(name: str, envelope: dict[str, Any] | None) -> dict[str, 
 def build_report(source_db: str | Path, *, room_id: str = "room-1", task_id: str = "task-1") -> dict[str, Any]:
     adapter = SparkbotReadonlySpineAdapterPrototype.from_source_db(source_db)
     try:
-        open_queue = _task_list_envelope(adapter.list_open_queue(room_id=room_id))
-        blocked_queue = _task_list_envelope(adapter.list_blocked_queue(room_id=room_id))
-        approval_waiting_queue = _task_list_envelope(adapter.list_approval_waiting_queue(room_id=room_id))
-        recent_events = _event_list_envelope(adapter.list_recent_events(room_id=room_id))
-        room_overview = adapter.get_room_overview(room_id=room_id)
-        project_workload = _project_workload_envelope(adapter.get_project_workload_summary(room_id=room_id))
-        task_detail = _task_detail_envelope(adapter.get_task_detail(task_id=task_id))
+        resolved_room_id = adapter.resolve_room_id(room_id)
+        resolved_task_id = adapter.resolve_task_id(task_id, room_id=resolved_room_id)
+
+        open_queue = _task_list_envelope(adapter.list_open_queue(room_id=resolved_room_id))
+        blocked_queue = _task_list_envelope(adapter.list_blocked_queue(room_id=resolved_room_id))
+        approval_waiting_queue = _task_list_envelope(adapter.list_approval_waiting_queue(room_id=resolved_room_id))
+        recent_events = _event_list_envelope(adapter.list_recent_events(room_id=resolved_room_id))
+        room_overview = adapter.get_room_overview(room_id=resolved_room_id or room_id)
+        project_workload = _project_workload_envelope(adapter.get_project_workload_summary(room_id=resolved_room_id))
+        task_detail = _task_detail_envelope(adapter.get_task_detail(task_id=resolved_task_id or task_id))
 
         route_envelopes = {
             "open_queue": open_queue,

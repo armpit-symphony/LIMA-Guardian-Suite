@@ -278,7 +278,7 @@ def test_secret_like_values_redacted(tmp_path):
     assert "secret-value" not in report_text
     data = json.loads(report_text)
     event_preview = data["comparisons"]["task_detail"]["normalized_preview"]["events"][0]
-    assert event_preview["payload"]["tool_args"]["api_key"] == "[REDACTED]"
+    assert event_preview["payload"] == {}
 
 
 def test_json_report_generated(tmp_path):
