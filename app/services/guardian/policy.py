@@ -1,254 +1,24 @@
+"""Sparkbot-compatible wrapper around pure Guardian policy core."""
+
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Mapping
 
-
-PolicyAction = Literal["allow", "confirm", "deny", "privileged", "privileged_reveal"]
-PolicyScope = Literal["read", "write", "execute", "admin"]
-
-
-@dataclass(frozen=True)
-class ToolPolicy:
-    tool_name: str
-    scope: PolicyScope
-    resource: str
-    default_action: PolicyAction
-    action_type: str
-    high_risk: bool = False
-    requires_execution_gate: bool = False
-
-
-@dataclass(frozen=True)
-class PolicyDecision:
-    tool_name: str
-    scope: PolicyScope
-    resource: str
-    action: PolicyAction
-    action_type: str
-    high_risk: bool
-    reason: str
-
-    def to_json(self) -> str:
-        return json.dumps(
-            {
-                "tool_name": self.tool_name,
-                "scope": self.scope,
-                "resource": self.resource,
-                "action": self.action,
-                "action_type": self.action_type,
-                "high_risk": self.high_risk,
-                "reason": self.reason,
-            }
-        )
-
-
-def _build_policy_registry() -> dict[str, ToolPolicy]:
-    registry: dict[str, ToolPolicy] = {}
-
-    def add(
-        tool_name: str,
-        *,
-        scope: PolicyScope,
-        resource: str,
-        default_action: PolicyAction,
-        action_type: str,
-        high_risk: bool = False,
-        requires_execution_gate: bool = False,
-    ) -> None:
-        registry[tool_name] = ToolPolicy(
-            tool_name=tool_name,
-            scope=scope,
-            resource=resource,
-            default_action=default_action,
-            action_type=action_type,
-            high_risk=high_risk,
-            requires_execution_gate=requires_execution_gate,
-        )
-
-    for tool_name in (
-        "web_search",
-        "get_datetime",
-        "calculate",
-        "list_tasks",
-        "github_list_prs",
-        "github_get_pr",
-        "github_get_ci_status",
-        "slack_list_channels",
-        "slack_get_channel_history",
-        "notion_search",
-        "notion_get_page",
-        "confluence_search",
-        "confluence_get_page",
-        "gmail_fetch_inbox",
-        "gmail_search",
-        "gmail_get_message",
-        "drive_search",
-        "drive_get_file",
-        "email_fetch_inbox",
-        "email_search",
-        "list_reminders",
-        "calendar_list_events",
-        "guardian_list_tasks",
-        "guardian_list_runs",
-    ):
-        add(
-            tool_name,
-            scope="read",
-            resource="workspace",
-            default_action="allow",
-            action_type="read",
-        )
-
-    for tool_name, resource in (
-        ("remember_fact", "memory"),
-        ("forget_fact", "memory"),
-        ("create_task", "room_task"),
-        ("complete_task", "room_task"),
-        ("set_reminder", "reminder"),
-        ("cancel_reminder", "reminder"),
-        ("guardian_run_task", "guardian_task"),
-        ("guardian_pause_task", "guardian_task"),
-    ):
-        add(
-            tool_name,
-            scope="write",
-            resource=resource,
-            default_action="allow",
-            action_type="room_write",
-        )
-
-    for tool_name, resource in (
-        ("gmail_send", "gmail"),
-        ("email_send", "email"),
-        ("slack_send_message", "slack"),
-        ("github_create_issue", "github"),
-        ("notion_create_page", "notion"),
-        ("confluence_create_page", "confluence"),
-        ("calendar_create_event", "calendar"),
-        ("drive_create_folder", "drive"),
-        ("guardian_schedule_task", "guardian_task"),
-    ):
-        add(
-            tool_name,
-            scope="write",
-            resource=resource,
-            default_action="confirm",
-            action_type="write_external",
-            high_risk=True,
-        )
-
-    add(
-        "server_read_command",
-        scope="execute",
-        resource="server",
-        default_action="allow",
-        action_type="command_exec",
-        high_risk=True,
-        requires_execution_gate=True,
-    )
-    add(
-        "ssh_read_command",
-        scope="execute",
-        resource="ssh",
-        default_action="allow",
-        action_type="ssh_exec",
-        high_risk=True,
-        requires_execution_gate=True,
-    )
-    add(
-        "server_manage_service",
-        scope="execute",
-        resource="service",
-        default_action="confirm",
-        action_type="service_control",
-        high_risk=True,
-        requires_execution_gate=True,
-    )
-
-    # Vault tools — safe mode allows listing and internal use; writes + reveal require break-glass
-    add(
-        "vault_list_secrets",
-        scope="read",
-        resource="vault",
-        default_action="allow",
-        action_type="read",
-    )
-    add(
-        "vault_use_secret",
-        scope="read",
-        resource="vault",
-        default_action="allow",
-        action_type="read",
-    )
-    add(
-        "vault_add_secret",
-        scope="write",
-        resource="vault",
-        default_action="privileged",
-        action_type="vault_write",
-        high_risk=True,
-    )
-    add(
-        "vault_update_secret",
-        scope="write",
-        resource="vault",
-        default_action="privileged",
-        action_type="vault_write",
-        high_risk=True,
-    )
-    add(
-        "vault_reveal_secret",
-        scope="read",
-        resource="vault",
-        default_action="privileged_reveal",
-        action_type="vault_reveal",
-        high_risk=True,
-    )
-    add(
-        "vault_delete_secret",
-        scope="write",
-        resource="vault",
-        default_action="privileged_reveal",
-        action_type="vault_reveal",
-        high_risk=True,
-    )
-
-    return registry
-
-
-TOOL_POLICIES = _build_policy_registry()
-READ_ONLY_SERVICE_ACTIONS = {"status", "service_status", "show_status", "logs", "log", "service_logs", "show_logs"}
+from guardian_core.policy import (
+    PolicyAction,
+    PolicyDecision,
+    PolicyScope,
+    ToolPolicy,
+    decide_tool_use as _core_decide_tool_use,
+    get_tool_policy as _core_get_tool_policy,
+)
 
 
 def get_tool_policy(tool_name: str, args: dict[str, Any] | None = None) -> ToolPolicy:
-    args = args or {}
-    if tool_name == "server_manage_service":
-        action = str(args.get("action", "")).strip().lower()
-        if action in READ_ONLY_SERVICE_ACTIONS:
-            return ToolPolicy(
-                tool_name=tool_name,
-                scope="read",
-                resource="service",
-                default_action="allow",
-                action_type="read",
-                high_risk=False,
-            )
-    # Check skill-provided policies before unknown→deny fallback
-    from app.services.skills import _registry as _skill_registry  # lazy import avoids circular
-    skill_pol = _skill_registry.policies.get(tool_name)
-    if skill_pol:
-        return ToolPolicy(tool_name=tool_name, **skill_pol)
-    return TOOL_POLICIES.get(
+    return _core_get_tool_policy(
         tool_name,
-        ToolPolicy(
-            tool_name=tool_name,
-            scope="admin",
-            resource="unknown",
-            default_action="deny",
-            action_type="deny",
-        ),
+        args,
+        extra_policies=_load_skill_policies(),
     )
 
 
@@ -260,105 +30,32 @@ def decide_tool_use(
     is_operator: bool = False,
     is_privileged: bool = False,
 ) -> PolicyDecision:
-    policy = get_tool_policy(tool_name, args)
-
-    if tool_name.startswith("vault_") and not is_operator:
-        return PolicyDecision(
-            tool_name=tool_name,
-            scope=policy.scope,
-            resource=policy.resource,
-            action="deny",
-            action_type=policy.action_type,
-            high_risk=True,
-            reason="Vault tools are restricted to configured Sparkbot operators.",
-        )
-
-    if policy.default_action == "deny":
-        return PolicyDecision(
-            tool_name=tool_name,
-            scope=policy.scope,
-            resource=policy.resource,
-            action="deny",
-            action_type=policy.action_type,
-            high_risk=policy.high_risk,
-            reason=f"Tool '{tool_name}' is not approved by Sparkbot policy.",
-        )
-
-    if policy.requires_execution_gate and not room_execution_allowed:
-        return PolicyDecision(
-            tool_name=tool_name,
-            scope=policy.scope,
-            resource=policy.resource,
-            action="deny",
-            action_type=policy.action_type,
-            high_risk=policy.high_risk,
-            reason=(
-                "Execution is disabled for this room. Enable the room execution gate "
-                "before using server or SSH operations."
-            ),
-        )
-
-    if policy.default_action == "confirm":
-        return PolicyDecision(
-            tool_name=tool_name,
-            scope=policy.scope,
-            resource=policy.resource,
-            action="confirm",
-            action_type=policy.action_type,
-            high_risk=policy.high_risk,
-            reason=f"{policy.scope.title()} access to {policy.resource} requires confirmation.",
-        )
-
-    # Privileged-only tools: require break-glass session
-    if policy.default_action == "privileged":
-        if is_privileged:
-            return PolicyDecision(
-                tool_name=tool_name,
-                scope=policy.scope,
-                resource=policy.resource,
-                action="allow",
-                action_type=policy.action_type,
-                high_risk=policy.high_risk,
-                reason=f"Privileged access to {policy.resource} is allowed (break-glass active).",
-            )
-        return PolicyDecision(
-            tool_name=tool_name,
-            scope=policy.scope,
-            resource=policy.resource,
-            action="privileged",
-            action_type=policy.action_type,
-            high_risk=policy.high_risk,
-            reason=f"'{tool_name}' requires break-glass privileged mode. Use /breakglass to authenticate.",
-        )
-
-    # Privileged-reveal tools: require break-glass AND explicit confirm
-    if policy.default_action == "privileged_reveal":
-        if is_privileged:
-            return PolicyDecision(
-                tool_name=tool_name,
-                scope=policy.scope,
-                resource=policy.resource,
-                action="confirm",
-                action_type=policy.action_type,
-                high_risk=policy.high_risk,
-                reason=f"Destructive vault operation on {policy.resource} requires explicit confirmation.",
-            )
-        return PolicyDecision(
-            tool_name=tool_name,
-            scope=policy.scope,
-            resource=policy.resource,
-            action="privileged_reveal",
-            action_type=policy.action_type,
-            high_risk=policy.high_risk,
-            reason=f"'{tool_name}' requires break-glass privileged mode. Use /breakglass to authenticate.",
-        )
-
-    return PolicyDecision(
-        tool_name=tool_name,
-        scope=policy.scope,
-        resource=policy.resource,
-        action="allow",
-        action_type=policy.action_type,
-        high_risk=policy.high_risk,
-        reason=f"{policy.scope.title()} access to {policy.resource} is allowed.",
+    return _core_decide_tool_use(
+        tool_name,
+        args,
+        room_execution_allowed=room_execution_allowed,
+        is_operator=is_operator,
+        is_privileged=is_privileged,
+        extra_policies=_load_skill_policies(),
     )
+
+
+def _load_skill_policies() -> Mapping[str, Mapping[str, Any]]:
+    try:
+        from app.services.skills import _registry as skill_registry
+    except Exception:
+        return {}
+    policies = getattr(skill_registry, "policies", {})
+    if isinstance(policies, Mapping):
+        return policies
+    return {}
+
+
+__all__ = [
+    "PolicyAction",
+    "PolicyDecision",
+    "PolicyScope",
+    "ToolPolicy",
+    "decide_tool_use",
+    "get_tool_policy",
+]

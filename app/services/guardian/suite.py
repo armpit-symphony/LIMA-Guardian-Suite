@@ -1,16 +1,23 @@
 """Unified Guardian suite entrypoint for Sparkbot.
 
 This file provides a single import surface for the Guardian stack so the
-integration can be treated as one suite even though the implementation still
-uses focused modules internally.
+integration can be treated as one suite even though some implementation modules
+still depend on Sparkbot runtime packages or optional dependencies.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib import import_module
+from types import SimpleNamespace
 from typing import Any
 
-from . import auth, executive, meeting_recorder, memory, pending_approvals, policy, task_guardian, token_guardian, vault, verifier
+
+_OPTIONAL_COMPONENT_FALLBACKS: dict[str, tuple[str, ...]] = {
+    "meeting_recorder": ("generate_meeting_notes",),
+    "task_guardian": ("list_tasks",),
+    "token_guardian": ("route_model",),
+}
 
 
 @dataclass(frozen=True)
@@ -58,17 +65,39 @@ class GuardianSuite:
         ]
 
 
+def _unavailable_component(component_name: str, missing: Exception) -> Any:
+    def unavailable(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError(
+            f"Guardian component '{component_name}' is unavailable because optional "
+            f"Sparkbot runtime dependencies are missing: {missing}"
+        ) from missing
+
+    attrs = {name: unavailable for name in _OPTIONAL_COMPONENT_FALLBACKS.get(component_name, ())}
+    attrs["__name__"] = f"app.services.guardian.{component_name}.unavailable"
+    attrs["__guardian_unavailable_reason__"] = repr(missing)
+    return SimpleNamespace(**attrs)
+
+
+def _load_component(component_name: str) -> Any:
+    try:
+        return import_module(f"app.services.guardian.{component_name}")
+    except ModuleNotFoundError as exc:
+        if component_name in _OPTIONAL_COMPONENT_FALLBACKS:
+            return _unavailable_component(component_name, exc)
+        raise
+
+
 guardian_suite = GuardianSuite(
-    auth=auth,
-    executive=executive,
-    meeting_recorder=meeting_recorder,
-    memory=memory,
-    pending_approvals=pending_approvals,
-    policy=policy,
-    task_guardian=task_guardian,
-    token_guardian=token_guardian,
-    vault=vault,
-    verifier=verifier,
+    auth=_load_component("auth"),
+    executive=_load_component("executive"),
+    meeting_recorder=_load_component("meeting_recorder"),
+    memory=_load_component("memory"),
+    pending_approvals=_load_component("pending_approvals"),
+    policy=_load_component("policy"),
+    task_guardian=_load_component("task_guardian"),
+    token_guardian=_load_component("token_guardian"),
+    vault=_load_component("vault"),
+    verifier=_load_component("verifier"),
 )
 
 

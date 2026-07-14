@@ -34,6 +34,7 @@ dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "pytest-cov>=4.0",
+    "pydantic>=2.0",
     "black>=23.0",
     "ruff>=0.1.0",
 ]
@@ -45,7 +46,7 @@ Issues = "https://github.com/armpit-symphony/Guardian_Suite/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["guardian*"]
+include = ["guardian*", "guardian_core*"]
 
 [tool.ruff]
 line-length = 100
@@ -53,4 +54,11 @@ target-version = "py310"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-asyncio_mode = "auto"
+pythonpath = ["."]
+norecursedirs = [
+    ".pytest_cache",
+    ".pytest-tmp",
+    "pytest-cache-files-*",
+    "__pycache__",
+    "data",
+]

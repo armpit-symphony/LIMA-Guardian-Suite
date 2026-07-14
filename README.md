@@ -2,6 +2,12 @@
 
 This repo centralizes the Guardian stack extracted from Sparkbot into one place.
 
+## Historical References
+
+These are historical documentation references only. Current product code lives in `lima_guardian/`.
+
+See `docs/reference/original_guardians/` for documentation-only notes on the original standalone Guardian repositories.
+
 ## Layout
 
 - `app/services/guardian/`
@@ -27,14 +33,12 @@ This repo centralizes the Guardian stack extracted from Sparkbot into one place.
 - vendored `memory_os`
 - vendored `tokenguardian`
 
-## Important
+## Standalone Public API
 
-This extraction preserves the original module layout, but some modules still depend on Sparkbot packages such as `app.crud`, `app.models`, and selected chat/tool routes. This repo is the consolidated source of the suite, not yet a fully decoupled standalone package.
+Install with `python -m pip install -e .`, then import
+`GuardianEvaluationRequest`, `GuardianDecision`, and
+`evaluate_guardian_request` from `guardian_core`.
 
-The single unified entrypoint is:
-
-- `app.services.guardian.suite`
-
-Use `get_guardian_suite()` or `guardian_suite_inventory()` from:
-
-- `app.services.guardian`
+This API evaluates policy and returns a Guardian-owned `decision_id`; it never
+executes the requested action. The legacy `app.services.guardian` tree remains
+Sparkbot-coupled source and is not a supported installed entrypoint.

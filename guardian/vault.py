@@ -3,6 +3,7 @@ Vault - Encrypted secrets storage for API keys and credentials.
 """
 
 import os
+import base64
 import json
 import logging
 import sqlite3
@@ -20,12 +21,12 @@ class Vault:
         db_path: str = "data/guardian/vault.db",
         key_env: str = "SPARKBOT_VAULT_KEY",
     ):
-        self.db_path = db_path
+        self.db_path = Path(db_path)
         self.key_env = key_env
         self.encryption_key = os.getenv(key_env)
         
         # Ensure directory exists
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         
         self._init_db()
         
@@ -70,7 +71,7 @@ class Vault:
         
         # In production, encrypt value with self.encryption_key
         # For now, store with simple encoding
-        encrypted = value.encode('base64') if value else b''
+        encrypted = base64.b64encode(value.encode('utf-8')) if value else b''
         
         try:
             c.execute("""
@@ -114,7 +115,8 @@ class Vault:
             
         # Decode (in production, decrypt)
         try:
-            value = encrypted.decode('base64')
+            raw = bytes(encrypted) if not isinstance(encrypted, bytes) else encrypted
+            value = base64.b64decode(raw).decode('utf-8')
             return value
         except:
             return None
