@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping
-
+from urllib.parse import urlsplit
 
 PolicyAction = Literal["allow", "confirm", "deny", "privileged", "privileged_reveal"]
 PolicyScope = Literal["read", "write", "execute", "admin"]
@@ -61,6 +61,91 @@ READ_ONLY_SERVICE_ACTIONS = {
     "service_logs",
     "show_logs",
 }
+
+LOCAL_MODEL_PREVIEW_ACTION = "arc.local_model_preview"
+_LOCAL_MODEL_PREVIEW_CONTEXT = {
+    "network_scope": "loopback_only",
+    "external_side_effects": False,
+    "credentials_required": False,
+    "execution_scope": "model_preview_only",
+    "runtime_route": "lima",
+}
+_LOCAL_MODEL_PREVIEW_HOSTS = frozenset({"127.0.0.1", "localhost"})
+
+
+def _local_model_preview_decision(*, allowed: bool, reason: str) -> PolicyDecision:
+    return PolicyDecision(
+        tool_name=LOCAL_MODEL_PREVIEW_ACTION,
+        scope="execute",
+        resource="local_model_preview",
+        action="allow" if allowed else "deny",
+        action_type="model_preview",
+        high_risk=False,
+        reason=reason,
+    )
+
+
+def decide_local_model_preview(
+    arguments: Mapping[str, Any],
+    policy_context: Mapping[str, Any],
+) -> PolicyDecision:
+    """Allow only the reviewed LIMA-to-loopback Ollama preview contract."""
+
+    def denied(reason: str) -> PolicyDecision:
+        return _local_model_preview_decision(allowed=False, reason=reason)
+
+    if not isinstance(arguments, Mapping) or not isinstance(policy_context, Mapping):
+        return denied(
+            "Local model preview requires mapping arguments and policy context."
+        )
+
+    if arguments.get("model_adapter") != "ollama":
+        return denied("Local model preview requires the Ollama model adapter.")
+
+    for key, expected in _LOCAL_MODEL_PREVIEW_CONTEXT.items():
+        actual = policy_context.get(key)
+        matches = (
+            actual is expected if isinstance(expected, bool) else actual == expected
+        )
+        if not matches:
+            return denied(
+                f'Local model preview policy context "{key}" is not allowed.'
+            )
+
+    endpoint = arguments.get("endpoint")
+    if (
+        not isinstance(endpoint, str)
+        or not endpoint
+        or endpoint != endpoint.strip()
+        or any(character.isspace() for character in endpoint)
+    ):
+        return denied("Local model preview requires an explicit loopback endpoint.")
+
+    try:
+        parsed = urlsplit(endpoint)
+        host = parsed.hostname
+        _ = parsed.port  # Validate malformed and out-of-range ports without connecting.
+    except ValueError:
+        return denied("Local model preview endpoint is malformed.")
+
+    if parsed.scheme != "http":
+        return denied("Local model preview endpoint must use HTTP.")
+    if parsed.username is not None or parsed.password is not None:
+        return denied("Local model preview endpoint must not contain credentials.")
+    if host is None or host.lower() not in _LOCAL_MODEL_PREVIEW_HOSTS:
+        return denied(
+            "Local model preview endpoint must use an approved loopback host."
+        )
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        return denied("Local model preview endpoint must be a loopback base URL.")
+
+    return _local_model_preview_decision(
+        allowed=True,
+        reason=(
+            "Bounded Arc local model preview is allowed through LIMA to loopback "
+            "Ollama."
+        ),
+    )
 
 
 def list_tool_policies() -> dict[str, ToolPolicy]:
