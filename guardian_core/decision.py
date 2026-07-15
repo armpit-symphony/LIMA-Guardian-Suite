@@ -8,7 +8,12 @@ import json
 from typing import Any, Mapping
 import uuid
 
-from .policy import PolicyDecision, decide_tool_use
+from .policy import (
+    LOCAL_MODEL_PREVIEW_ACTION,
+    PolicyDecision,
+    decide_local_model_preview,
+    decide_tool_use,
+)
 
 GUARDIAN_DECISION_STATUSES = ("allow", "deny", "requires_approval")
 _APPROVAL_POLICY_ACTIONS = frozenset({"confirm", "privileged", "privileged_reveal"})
@@ -164,6 +169,8 @@ def _utc_now() -> str:
 
 
 def _evaluate_policy(request: GuardianEvaluationRequest) -> PolicyDecision:
+    if request.requested_action == LOCAL_MODEL_PREVIEW_ACTION:
+        return decide_local_model_preview(request.arguments, request.policy_context)
     return decide_tool_use(request.requested_action, request.arguments)
 
 
